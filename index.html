@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Peer Desk</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="app-header">
+    <div>
+      <h1>Peer Desk <span id="status" class="status-off">[OFFLINE]</span></h1>
+      <p class="subtitle">A private, zero-server study table for two.</p>
+    </div>
+    <div class="btn-row" style="margin-top:0;">
+      <button class="minor-btn" onclick="toggleWatch()">🎬 Watch Together</button>
+      <button id="toggleDrawerBtn" class="minor-btn" onclick="toggleConnect()">Connect Friend</button>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <section id="connectDrawer" class="grid-row">
+      <div class="panel-box col">
+        <h2>Host a Desk (Send Invite)</h2>
+        <div class="btn-row" style="margin-top:0; margin-bottom:8px;">
+          <button class="minor-btn" onclick="armMedia(true, false)">+ Voice</button>
+          <button class="minor-btn" onclick="armMedia(true, true)">+ Video</button>
+          <button class="minor-btn" onclick="armScreen()">+ Screen</button>
+        </div>
+        <textarea id="myCode" rows="3" readonly placeholder="Click Create Invite to generate your connection code..."></textarea>
+        <div class="btn-row">
+          <button onclick="createInvite()">Create Invite</button>
+          <button class="minor-btn" onclick="copyCode()">Copy Code</button>
+        </div>
+      </div>
+
+      <div class="panel-box col">
+        <h2>Join a Desk (Paste Code)</h2>
+        <textarea id="friendCode" rows="5" placeholder="Paste your friend's invite or reply code here..."></textarea>
+        <div class="btn-row">
+          <button onclick="joinDesk()">Join Desk</button>
+          <button class="minor-btn" onclick="finishLink()">Complete Link</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="callBox" class="panel-box hidden">
+      <div class="grid-row">
+        <div class="col">
+          <h2>You</h2>
+          <video id="localVideo" autoplay muted playsinline></video>
+        </div>
+        <div class="col">
+          <h2>Friend</h2>
+          <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="muteBtn" class="minor-btn" style="flex:1;" onclick="toggleMute()">🔇 Mute Mic</button>
+        <button class="end-btn" style="flex:1;" onclick="stopMedia(true)">⏹ End Call</button>
+      </div>
+    </section>
+
+    <section id="watchBox" class="panel-box hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h2 style="margin:0; border:none;">Watch Together</h2>
+        <div class="btn-row" style="margin:0;">
+          <label for="videoFile" class="file-btn">📁 Load Video</label>
+          <input type="file" id="videoFile" accept="video/*" class="hidden" onchange="loadWatchVideo()">
+          <button class="minor-btn" onclick="toggleWatch()">Hide</button>
+        </div>
+      </div>
+      <video id="watchVideo" controls></video>
+    </section>
+
+    <section class="grid-row">
+      <div class="panel-box col">
+        <h2>Chat, Clean Links & Files</h2>
+        <div id="chat" class="chat-feed"></div>
+        
+        <div class="input-row">
+          <input type="text" id="msgInput" placeholder="Write a message, paste URL, or /clear /export /ping...">
+          <button onclick="sendMsg()">Send</button>
+        </div>
+
+        <div class="btn-row">
+          <label for="fileSend" class="file-btn">📁 Send File</label>
+          <input type="file" id="fileSend" class="hidden" onchange="sendFile()">
+          <button id="recBtn" class="minor-btn" onclick="toggleVoice()">🎤 Voice Note</button>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <h2>Shared Sketchpad</h2>
+        <canvas id="board" width="480" height="320"></canvas>
+        <div class="btn-row">
+          <button class="minor-btn" style="flex:1;" onclick="saveBoard()">Save PNG</button>
+          <button class="minor-btn" style="flex:1;" onclick="wipeBoard(true)">Wipe Board</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Handcrafted out of personal necessity by Nubaid</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
