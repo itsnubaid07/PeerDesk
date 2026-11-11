@@ -6,7 +6,7 @@ Peer Desk connects your browser directly to your friend's browser. Nothing is sa
 
 *Made by Nubaid*
 
-👉 **Open Peer Desk:** https://github.io/itsnubaid07/PeerDesk
+👉 **Open Peer Desk:** (https://itsnubaid07.github.io/PeerDesk/)
 
 ## What You Can Do
 * **Chat & Clean Links:** Send messages directly to your friend. Any link you paste is automatically cleaned of tracking tags (`utm_*`, `fbclid`, `si`) before sending.
@@ -20,3 +20,6 @@ Peer Desk connects your browser directly to your friend's browser. Nothing is sa
 1. Click **Create Invite** (click **+ Voice**, **+ Video**, or **+ Screen** first if you want a live call) and copy the code to your friend.
 2. Your friend pastes your code into the right box, clicks **Join Desk**, and sends their reply code back to you.
 3. Paste their reply code into the right box and click **Complete Link**. Your desk is now connected.
+
+---
+Handcrafted out of personal necessity by Nubaid 
