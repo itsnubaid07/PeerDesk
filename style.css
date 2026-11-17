@@ -1,3 +1,5 @@
+/* Peer Desk - Flat Typewriter & Flag-Green Stylesheet */
+
 :root {
   --paper: #f5f4ef;
   --panel: #ffffff;
@@ -5,7 +7,9 @@
   --muted: #686661;
   --green: #005a36;
   --green-dark: #004225;
+  --green-tint: #e1ede6;
   --red: #ba3c3c;
+  --red-dark: #962d2d;
 }
 
 * {
@@ -18,10 +22,12 @@ body {
   background-color: var(--paper);
   color: var(--ink);
   font-family: 'Courier New', Courier, monospace;
-  padding: 2rem 1.5rem;
+  line-height: 1.4;
+  padding: 2rem 1.25rem;
   display: flex;
   flex-direction: column;
   align-items: center;
+  min-height: 100vh;
 }
 
 .app-header {
@@ -34,19 +40,44 @@ body {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
 }
 
-h1 { font-size: 1.8rem; color: var(--green); }
-.subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 3px; }
-.status-off { font-size: 0.9rem; color: var(--red); }
-.status-on { font-size: 0.9rem; color: var(--green); }
+h1 {
+  font-size: 1.8rem;
+  color: var(--green);
+  letter-spacing: -0.5px;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 3px;
+}
+
+.status-off,
+.status-on {
+  font-size: 0.9rem;
+  font-weight: bold;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  background: var(--panel);
+}
+
+.status-off {
+  color: var(--red);
+}
+
+.status-on {
+  color: var(--green);
+}
 
 h2 {
   font-size: 1rem;
   margin-bottom: 0.75rem;
   border-bottom: 1px dashed var(--muted);
-  padding-bottom: 4px;
+  padding-bottom: 5px;
+  color: var(--ink);
 }
 
 .main-content {
@@ -71,36 +102,49 @@ h2 {
 }
 
 .col {
-  flex: 1;
-  min-width: 340px;
+  flex: 1 1 300px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-textarea, input[type="text"] {
+textarea,
+input[type="text"] {
   width: 100%;
   font-family: inherit;
   font-size: 0.85rem;
-  padding: 8px;
-  border: 1px solid var(--ink);
+  color: var(--ink);
+  padding: 8px 10px;
+  border: 1.5px solid var(--ink);
   background: #faf9f6;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-textarea:focus, input:focus {
+textarea:focus,
+input[type="text"]:focus {
   outline: none;
-  border: 2px solid var(--green);
-  background: #fff;
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green);
+  background: #ffffff;
 }
 
-.btn-row, .input-row {
+.btn-row,
+.input-row {
   display: flex;
   gap: 10px;
   margin-top: 10px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-button, .file-btn {
+.input-row input[type="text"] {
+  flex: 1 1 200px;
+}
+
+button,
+.file-btn {
   background: var(--green);
-  color: #fff;
+  color: #ffffff;
   border: 2px solid var(--ink);
   box-shadow: 2px 2px 0 var(--ink);
   padding: 7px 14px;
@@ -109,26 +153,52 @@ button, .file-btn {
   font-size: 0.85rem;
   cursor: pointer;
   text-align: center;
+  user-select: none;
+  transition: transform 0.06s ease, box-shadow 0.06s ease, background-color 0.12s ease;
 }
 
-button:hover, .file-btn:hover { background: var(--green-dark); }
-button:active, .file-btn:active {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--ink);
+button:hover,
+.file-btn:hover {
+  background: var(--green-dark);
 }
 
-button.minor-btn, .file-btn { background: #fff; color: var(--green); }
-button.minor-btn:hover, .file-btn:hover { background: #e1ede6; }
-button.recording, button.end-btn { background: var(--red); color: #fff; }
-button.end-btn:hover { background: #962d2d; }
+button:active,
+.file-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--ink);
+}
 
-.hidden { display: none !important; }
+button.minor-btn,
+.file-btn {
+  background: #ffffff;
+  color: var(--green);
+}
+
+button.minor-btn:hover,
+.file-btn:hover {
+  background: var(--green-tint);
+}
+
+button.recording,
+button.end-btn {
+  background: var(--red);
+  color: #ffffff;
+}
+
+button.end-btn:hover {
+  background: var(--red-dark);
+}
+
+.hidden {
+  display: none !important;
+}
 
 video {
   width: 100%;
   max-height: 240px;
-  background: #111;
-  border: 1px solid var(--ink);
+  background: #111111;
+  border: 1.5px solid var(--ink);
+  display: block;
 }
 
 #watchVideo {
@@ -136,7 +206,7 @@ video {
 }
 
 audio {
-  height: 30px;
+  height: 32px;
   margin-top: 4px;
   max-width: 100%;
 }
@@ -144,6 +214,8 @@ audio {
 .chat-feed {
   height: 285px;
   overflow-y: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border: 1px dotted var(--muted);
   background: #fafafa;
   padding: 10px;
@@ -153,14 +225,24 @@ audio {
   gap: 8px;
 }
 
-.chat-feed a { color: var(--green); font-weight: bold; }
+.chat-feed a {
+  color: var(--green);
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+.chat-feed a:hover {
+  color: var(--green-dark);
+}
 
 canvas {
-  border: 1px solid var(--ink);
+  border: 1.5px solid var(--ink);
   background: #ffffff;
   cursor: crosshair;
   display: block;
-  max-width: 100%;
+  width: 100%;
+  height: auto;
+  touch-action: none;
 }
 
 #sharedPad {
@@ -168,6 +250,24 @@ canvas {
   line-height: 1.5;
   resize: vertical;
   tab-size: 2;
+  min-height: 180px;
+}
+
+/* Subtle Typewriter Scrollbars */
+.chat-feed::-webkit-scrollbar,
+textarea::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-feed::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track {
+  background: var(--paper);
+}
+
+.chat-feed::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border: 1px solid var(--ink);
 }
 
 .footer {
@@ -178,4 +278,43 @@ canvas {
   max-width: 1100px;
   border-top: 1px dashed var(--muted);
   padding-top: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: 1.25rem 0.85rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  .panel-box {
+    padding: 1rem;
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+}
+
+/* Utility Helpers */
+.no-top { margin-top: 0; }
+.mb-sm { margin-bottom: 8px; }
+.flex-1 { flex: 1; }
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.panel-head h2 {
+  margin-bottom: 0;
+  border-bottom: none;
+  padding-bottom: 0;
 }

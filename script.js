@@ -1,20 +1,26 @@
-var pc = null;
-var dcChat = null;
-var dcSketch = null;
-var dcFiles = null;
-var recorder = null;
-var chunks = [];
-var localStream = null;
-var syncing = false;
-var padSyncing = false;
-var incomingFiles = {};
-var connectTimer = null;
+// Peer Desk — Private, Zero-Server Study Table for Two
+// Handcrafted out of personal necessity using native browser APIs
+
+let pc = null;
+let dcChat = null;
+let dcSketch = null;
+let dcFiles = null;
+let recorder = null;
+let audioChunks = [];
+let localStream = null;
+let syncing = false;
+let padSyncing = false;
+let padTimer = null;
+let incomingFiles = {};
+let connectTimer = null;
+let sdpVersion = 0;
 
 let logs = JSON.parse(sessionStorage.getItem("pedesk_logs") || "[]");
 const chat = document.getElementById("chat");
 const watchVideo = document.getElementById("watchVideo");
 const sharedPad = document.getElementById("sharedPad");
 
+// --- SAFE DOM & CHAT HELPERS ---
 function escapeHTML(str) {
   const div = document.createElement("div");
   div.textContent = str;
@@ -33,17 +39,55 @@ function addLine(who, html, save) {
   }
 }
 
+function addAudioLine(who, dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:audio/")) return;
+
+  const row = document.createElement("div");
+  const label = document.createElement("b");
+  label.textContent = `[${who}] `;
+
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.src = dataUrl;
+
+  row.append(label, document.createElement("br"), audio);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addFileLine(who, fileName, dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return;
+  if (dataUrl.startsWith("data:text/html") || dataUrl.startsWith("data:image/svg")) return;
+
+  const row = document.createElement("div");
+  const label = document.createElement("b");
+  label.textContent = `[${who}] `;
+
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = fileName;
+  link.textContent = `💾 ${fileName}`;
+
+  row.append(label, link);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
 for (let i = 0; i < logs.length; i++) {
   addLine(logs[i].who, logs[i].html, false);
 }
 
-// --- COMPRESSION & MAGIC URL HELPERS ---
+// --- ZERO-SERVER MAGIC LINK COMPRESSION ---
 async function encodeSDP(desc) {
   const json = JSON.stringify(desc);
   if (!window.CompressionStream) return btoa(json);
   const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"));
   const buf = await new Response(stream).arrayBuffer();
-  const bin = String.fromCharCode(...new Uint8Array(buf));
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
   return "PD1_" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
@@ -68,24 +112,24 @@ function buildMagicLink(type, code) {
   return `${base}#${type}=${code}`;
 }
 
+// --- DIRECT WEBRTC PEER SETUP ---
 function getPeer() {
   if (pc) return pc;
 
-  const g1 = ["stun", "l", "google", "com"].join(".");
-  const g2 = ["stun1", "l", "google", "com"].join(".");
-  const cf = ["stun", "cloudflare", "com"].join(".");
-
   pc = new RTCPeerConnection({
     iceServers: [
-      { urls: "stun:" + g1 + ":19302" },
-      { urls: "stun:" + g2 + ":19302" },
-      { urls: "stun:" + cf + ":3478" }
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun.cloudflare.com:3478" }
     ]
   });
 
   pc.onicecandidate = async () => {
-    if (pc.localDescription) {
-      const code = await encodeSDP(pc.localDescription);
+    if (!pc.localDescription) return;
+    const currentVersion = ++sdpVersion;
+    const code = await encodeSDP(pc.localDescription);
+
+    if (currentVersion === sdpVersion) {
       const tag = pc.localDescription.type === "offer" ? "invite" : "reply";
       document.getElementById("myCode").value = buildMagicLink(tag, code);
     }
@@ -125,6 +169,7 @@ function getPeer() {
   return pc;
 }
 
+// --- PRIVACY-FIRST LINK CLEANER ---
 function cleanLink(text) {
   const safeText = escapeHTML(text);
   if (!text.startsWith("http://") && !text.startsWith("https://")) return safeText;
@@ -149,37 +194,53 @@ function toggleWatch() {
   document.getElementById("watchBox").classList.toggle("hidden");
 }
 
-async function armMedia(audio, video) {
+// --- VOICE, VIDEO & SCREEN SHARE ---
+async function startStream(getStreamFn, readyMsg) {
   try {
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+
     const peer = getPeer();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio, video });
+    const stream = await getStreamFn();
     localStream = stream;
+
     document.getElementById("callBox").classList.remove("hidden");
     document.getElementById("localVideo").srcObject = stream;
-    stream.getTracks().forEach(track => peer.addTrack(track, stream));
-    addLine("SYS", "Mic/Cam ready.", false);
+
+    peer.getSenders().forEach(sender => {
+      if (sender.track) peer.removeTrack(sender);
+    });
+
+    stream.getTracks().forEach(track => {
+      peer.addTrack(track, stream);
+      track.onended = () => stopMedia(true);
+    });
+
+    if (dcChat && dcChat.readyState === "open") {
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      dcChat.send(JSON.stringify({ type: "renegotiate", sdp: peer.localDescription }));
+    }
+
+    addLine("SYS", readyMsg, false);
   } catch (err) {
     addLine("SYS", "Media error: " + escapeHTML(err.name), false);
   }
 }
 
-async function armScreen() {
-  try {
-    const peer = getPeer();
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    localStream = stream;
-    document.getElementById("callBox").classList.remove("hidden");
-    document.getElementById("localVideo").srcObject = stream;
-    stream.getTracks().forEach(track => peer.addTrack(track, stream));
-    addLine("SYS", "Screen ready.", false);
-  } catch (err) {
-    addLine("SYS", "Screen error: " + escapeHTML(err.name), false);
-  }
-}
+const armMedia = (audio, video) =>
+  startStream(() => navigator.mediaDevices.getUserMedia({ audio, video }), "Mic/Cam ready.");
+
+const armScreen = () =>
+  startStream(() => navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }), "Screen ready.");
 
 function stopMedia(emit) {
   if (localStream) {
-    localStream.getTracks().forEach(track => track.stop());
+    localStream.getTracks().forEach(track => {
+      track.onended = null;
+      track.stop();
+    });
     localStream = null;
   }
 
@@ -236,6 +297,9 @@ function setupChatChannel(channel) {
     if (sharedPad && sharedPad.value) {
       dcChat.send(JSON.stringify({ type: "pad", text: sharedPad.value }));
     }
+    if (hasDrawn) {
+      dcChat.send(JSON.stringify({ type: "board-snap", img: canvas.toDataURL("image/png") }));
+    }
   };
   dcChat.onclose = () => {
     const badge = document.getElementById("status");
@@ -244,20 +308,46 @@ function setupChatChannel(channel) {
     stopMedia(false);
     addLine("SYS", "Disconnected.", false);
   };
-  dcChat.onmessage = (e) => {
-    const pkt = JSON.parse(e.data);
-    if (pkt.type === "msg") addLine("FRIEND", cleanLink(pkt.text), true);
-    if (pkt.type === "voice") addLine("FRIEND", `<br><audio controls src="${pkt.data}"></audio>`, false);
-    if (pkt.type === "wipe") wipeBoard(false);
-    if (pkt.type === "endcall") stopMedia(false);
-    if (pkt.type === "video") syncWatch(pkt);
-    if (pkt.type === "pad" && sharedPad) {
-      padSyncing = true;
-      sharedPad.value = pkt.text;
-      setTimeout(() => { padSyncing = false; }, 50);
+  dcChat.onmessage = async (e) => {
+    try {
+      const pkt = JSON.parse(e.data);
+
+      if (pkt.type === "renegotiate" && pc) {
+        await pc.setRemoteDescription(pkt.sdp);
+        if (pkt.sdp.type === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          dcChat.send(JSON.stringify({ type: "renegotiate", sdp: pc.localDescription }));
+        }
+        return;
+      }
+
+      if (pkt.type === "msg") addLine("FRIEND", cleanLink(pkt.text), true);
+      if (pkt.type === "voice") addAudioLine("FRIEND", pkt.data);
+      if (pkt.type === "wipe") wipeBoard(false);
+      if (pkt.type === "board-snap" && typeof pkt.img === "string" && pkt.img.startsWith("data:image/png")) {
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0);
+          hasDrawn = true;
+        };
+        img.src = pkt.img;
+      }
+      if (pkt.type === "endcall") stopMedia(false);
+      if (pkt.type === "video") syncWatch(pkt);
+      if (pkt.type === "pad" && sharedPad) {
+        const start = sharedPad.selectionStart;
+        const end = sharedPad.selectionEnd;
+        padSyncing = true;
+        sharedPad.value = pkt.text;
+        sharedPad.setSelectionRange(start, end);
+        setTimeout(() => { padSyncing = false; }, 50);
+      }
+      if (pkt.type === "ping") dcChat.send(JSON.stringify({ type: "pong", ts: pkt.ts }));
+      if (pkt.type === "pong") addLine("SYS", (Date.now() - pkt.ts) + "ms", false);
+    } catch {
+      // Ignore malformed packets silently
     }
-    if (pkt.type === "ping") dcChat.send(JSON.stringify({ type: "pong", ts: pkt.ts }));
-    if (pkt.type === "pong") addLine("SYS", (Date.now() - pkt.ts) + "ms", false);
   };
 }
 
@@ -265,30 +355,38 @@ function setupChatChannel(channel) {
 function setupSketchChannel(channel) {
   dcSketch = channel;
   dcSketch.onmessage = (e) => {
-    const pkt = JSON.parse(e.data);
-    if (pkt.type === "draw") drawLine(pkt.x1, pkt.y1, pkt.x2, pkt.y2, false);
+    try {
+      const pkt = JSON.parse(e.data);
+      if (pkt.type === "draw") drawLine(pkt.x1, pkt.y1, pkt.x2, pkt.y2, false);
+    } catch {
+      // Ignore malformed packets silently
+    }
   };
 }
 
-// --- CHANNEL 3: DEDICATED CHUNKED FILE PIPE ---
+// --- CHANNEL 3: DEDICATED 16KB CHUNKED FILE PIPE ---
 function setupFileChannel(channel) {
   dcFiles = channel;
   dcFiles.onmessage = (e) => {
-    const pkt = JSON.parse(e.data);
-    if (pkt.type === "file-meta") {
-      incomingFiles[pkt.id] = { name: pkt.name, total: pkt.total, parts: [] };
-      addLine("SYS", `Receiving ${escapeHTML(pkt.name)}...`, false);
-    }
-    if (pkt.type === "file-chunk") {
-      const f = incomingFiles[pkt.id];
-      if (!f) return;
-      f.parts[pkt.index] = pkt.data;
-      if (f.parts.filter(Boolean).length === f.total) {
-        const b64 = f.parts.join("");
-        const safeName = escapeHTML(f.name);
-        addLine("FRIEND", `<a href="${b64}" download="${safeName}">💾 ${safeName}</a>`, false);
-        delete incomingFiles[pkt.id];
+    try {
+      const pkt = JSON.parse(e.data);
+      if (pkt.type === "file-meta") {
+        incomingFiles[pkt.id] = { name: pkt.name, total: pkt.total, received: 0, parts: new Array(pkt.total) };
+        addLine("SYS", `Receiving ${escapeHTML(pkt.name)}...`, false);
       }
+      if (pkt.type === "file-chunk") {
+        const f = incomingFiles[pkt.id];
+        if (!f || pkt.index < 0 || pkt.index >= f.total) return;
+        if (!f.parts[pkt.index]) f.received++;
+        f.parts[pkt.index] = pkt.data;
+
+        if (f.received === f.total) {
+          addFileLine("FRIEND", f.name, f.parts.join(""));
+          delete incomingFiles[pkt.id];
+        }
+      }
+    } catch {
+      // Ignore malformed packets silently
     }
   };
 }
@@ -378,7 +476,7 @@ function copyCode() {
   addLine("SYS", "Full link copied to clipboard.", false);
 }
 
-// --- FOOLPROOF AUTO-DETECTION ON PASTE OR URL OPEN ---
+// --- AUTO-DETECT INVITE / REPLY ON PASTE OR URL OPEN ---
 document.getElementById("friendCode").addEventListener("input", () => {
   setTimeout(() => {
     const val = document.getElementById("friendCode").value.trim();
@@ -411,7 +509,12 @@ window.addEventListener("DOMContentLoaded", () => {
 if (sharedPad) {
   sharedPad.addEventListener("input", () => {
     if (padSyncing || !dcChat || dcChat.readyState !== "open") return;
-    dcChat.send(JSON.stringify({ type: "pad", text: sharedPad.value }));
+    clearTimeout(padTimer);
+    padTimer = setTimeout(() => {
+      if (dcChat && dcChat.readyState === "open") {
+        dcChat.send(JSON.stringify({ type: "pad", text: sharedPad.value }));
+      }
+    }, 120);
   });
 
   sharedPad.addEventListener("keydown", (e) => {
@@ -436,12 +539,15 @@ function copyPad() {
 function savePad() {
   if (!sharedPad) return;
   const blob = new Blob([sharedPad.value], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  a.href = url;
   a.download = "pedesk_notes.txt";
   a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// --- CHAT & LOCAL SLASH COMMANDS ---
 function sendMsg() {
   const input = document.getElementById("msgInput");
   const text = input.value.trim();
@@ -462,10 +568,12 @@ function sendMsg() {
 
   if (text === "/export") {
     const blob = new Blob([JSON.stringify(logs, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = "pedesk_notes.json";
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     return;
   }
 
@@ -488,6 +596,7 @@ document.getElementById("msgInput").addEventListener("keypress", (e) => {
   if (e.key === "Enter") sendMsg();
 });
 
+// --- 16KB CHUNKED FILE TRANSFER ---
 function sendFile() {
   const input = document.getElementById("fileSend");
   const file = input.files.item(0);
@@ -496,8 +605,7 @@ function sendFile() {
   const reader = new FileReader();
   reader.onload = async (e) => {
     const dataUrl = e.target.result;
-    const safeName = escapeHTML(file.name);
-    addLine("ME", `<a href="${dataUrl}" download="${safeName}">💾 ${safeName}</a>`, false);
+    addFileLine("ME", file.name, dataUrl);
 
     const pipe = (dcFiles && dcFiles.readyState === "open") ? dcFiles : dcChat;
     if (pipe && pipe.readyState === "open") {
@@ -520,6 +628,7 @@ function sendFile() {
   reader.readAsDataURL(file);
 }
 
+// --- VOICE NOTES ---
 async function toggleVoice() {
   const btn = document.getElementById("recBtn");
 
@@ -527,14 +636,14 @@ async function toggleVoice() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recorder = new MediaRecorder(stream);
-      chunks = [];
+      audioChunks = [];
 
-      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.ondataavailable = (e) => audioChunks.push(e.data);
       recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "audio/webm" });
+        const blob = new Blob(audioChunks, { type: "audio/webm" });
         const reader = new FileReader();
         reader.onload = (ev) => {
-          addLine("ME", `<br><audio controls src="${ev.target.result}"></audio>`, false);
+          addAudioLine("ME", ev.target.result);
           if (dcChat && dcChat.readyState === "open") {
             dcChat.send(JSON.stringify({ type: "voice", data: ev.target.result }));
           }
@@ -556,97 +665,114 @@ async function toggleVoice() {
   }
 }
 
+// --- LOCAL WATCH TOGETHER SYNC ---
 function loadWatchVideo() {
   const file = document.getElementById("videoFile").files.item(0);
   if (!file) return;
+  if (watchVideo.src && watchVideo.src.startsWith("blob:")) {
+    URL.revokeObjectURL(watchVideo.src);
+  }
   watchVideo.src = URL.createObjectURL(file);
   addLine("SYS", "Loaded video: " + escapeHTML(file.name), false);
 }
 
 function sendWatch(state) {
   if (syncing || !dcChat || dcChat.readyState !== "open") return;
-dcChat.send(JSON.stringify({ type: "video", state: state, time: watchVideo.currentTime }));
+  dcChat.send(JSON.stringify({ type: "video", state: state, time: watchVideo.currentTime }));
 }
+
 function syncWatch(pkt) {
-document.getElementById("watchBox").classList.remove("hidden");
-syncing = true;
-if (Math.abs(watchVideo.currentTime - pkt.time) > 0.5) {
-watchVideo.currentTime = pkt.time;
+  document.getElementById("watchBox").classList.remove("hidden");
+  syncing = true;
+  if (Math.abs(watchVideo.currentTime - pkt.time) > 0.5) {
+    watchVideo.currentTime = pkt.time;
+  }
+  if (pkt.state === "play") watchVideo.play().catch(() => {});
+  if (pkt.state === "pause") watchVideo.pause();
+  setTimeout(() => { syncing = false; }, 250);
 }
-if (pkt.state === "play") watchVideo.play().catch(() => {});
-if (pkt.state === "pause") watchVideo.pause();
-setTimeout(() => { syncing = false; }, 250);
-}
+
 watchVideo.onplay = () => sendWatch("play");
 watchVideo.onpause = () => sendWatch("pause");
 watchVideo.onseeked = () => sendWatch(watchVideo.paused ? "pause" : "play");
+
+// --- SHARED FLAG-GREEN SKETCHPAD ---
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 ctx.strokeStyle = "#005a36";
 ctx.lineWidth = 2;
 ctx.lineCap = "round";
 let drawing = false;
+let hasDrawn = false;
 let lx = 0;
 let ly = 0;
+
 function drawLine(x1, y1, x2, y2, emit) {
-ctx.beginPath();
-ctx.moveTo(x1, y1);
-ctx.lineTo(x2, y2);
-ctx.stroke();
-const pipe = (dcSketch && dcSketch.readyState === "open") ? dcSketch : dcChat;
-if (emit && pipe && pipe.readyState === "open") {
-pipe.send(JSON.stringify({ type: "draw", x1, y1, x2, y2 }));
+  hasDrawn = true;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  const pipe = (dcSketch && dcSketch.readyState === "open") ? dcSketch : dcChat;
+  if (emit && pipe && pipe.readyState === "open") {
+    pipe.send(JSON.stringify({ type: "draw", x1, y1, x2, y2 }));
+  }
 }
-}
+
 function wipeBoard(emit) {
-ctx.clearRect(0, 0, canvas.width, canvas.height);
-if (emit && dcChat && dcChat.readyState === "open") {
-dcChat.send(JSON.stringify({ type: "wipe" }));
+  hasDrawn = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (emit && dcChat && dcChat.readyState === "open") {
+    dcChat.send(JSON.stringify({ type: "wipe" }));
+  }
 }
-}
+
 function saveBoard() {
-const a = document.createElement("a");
-a.href = canvas.toDataURL("image/png");
-a.download = "pedesk_sketch.png";
-a.click();
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL("image/png");
+  a.download = "pedesk_sketch.png";
+  a.click();
 }
+
 function getCanvasPos(clientX, clientY) {
-const rect = canvas.getBoundingClientRect();
-return {
-x: (clientX - rect.left) * (canvas.width / rect.width),
-y: (clientY - rect.top) * (canvas.height / rect.height)
-};
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height)
+  };
 }
+
 canvas.onmousedown = (e) => {
-const pos = getCanvasPos(e.clientX, e.clientY);
-drawing = true;
-lx = pos.x;
-ly = pos.y;
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  drawing = true;
+  lx = pos.x;
+  ly = pos.y;
 };
 canvas.onmouseup = () => { drawing = false; };
 canvas.onmouseleave = () => { drawing = false; };
 canvas.onmousemove = (e) => {
-if (!drawing) return;
-const pos = getCanvasPos(e.clientX, e.clientY);
-drawLine(lx, ly, pos.x, pos.y, true);
-lx = pos.x;
-ly = pos.y;
+  if (!drawing) return;
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  drawLine(lx, ly, pos.x, pos.y, true);
+  lx = pos.x;
+  ly = pos.y;
 };
+
 canvas.ontouchstart = (e) => {
-e.preventDefault();
-const touch = e.touches.item(0);
-const pos = getCanvasPos(touch.clientX, touch.clientY);
-drawing = true;
-lx = pos.x;
-ly = pos.y;
+  e.preventDefault();
+  const touch = e.touches.item(0);
+  const pos = getCanvasPos(touch.clientX, touch.clientY);
+  drawing = true;
+  lx = pos.x;
+  ly = pos.y;
 };
 canvas.ontouchend = () => { drawing = false; };
 canvas.ontouchmove = (e) => {
-e.preventDefault();
-if (!drawing) return;
-const touch = e.touches.item(0);
-const pos = getCanvasPos(touch.clientX, touch.clientY);
-drawLine(lx, ly, pos.x, pos.y, true);
-lx = pos.x;
-ly = pos.y;
+  e.preventDefault();
+  if (!drawing) return;
+  const touch = e.touches.item(0);
+  const pos = getCanvasPos(touch.clientX, touch.clientY);
+  drawLine(lx, ly, pos.x, pos.y, true);
+  lx = pos.x;
+  ly = pos.y;
 };

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Peer Desk — A private, zero-server browser-to-browser study table for two.">
   <title>Peer Desk</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -13,9 +14,9 @@
       <h1>Peer Desk <span id="status" class="status-off">[OFFLINE]</span></h1>
       <p class="subtitle">A private, zero-server study table for two.</p>
     </div>
-    <div class="btn-row" style="margin-top:0;">
-      <button class="minor-btn" onclick="toggleWatch()">🎬 Watch Together</button>
-      <button id="toggleDrawerBtn" class="minor-btn" onclick="toggleConnect()">Connect Friend</button>
+    <div class="btn-row no-top">
+      <button type="button" class="minor-btn" onclick="toggleWatch()">&#127916; Watch Together</button>
+      <button type="button" id="toggleDrawerBtn" class="minor-btn" onclick="toggleConnect()">Connect Friend</button>
     </div>
   </header>
 
@@ -23,27 +24,25 @@
     <section id="connectDrawer" class="grid-row">
       <div class="panel-box col">
         <h2>Host a Desk (Send Invite)</h2>
-        <div class="btn-row" style="margin-top:0; margin-bottom:8px;">
-          <button class="minor-btn" onclick="armMedia(true, false)">+ Voice</button>
-          <button class="minor-btn" onclick="armMedia(true, true)">+ Video</button>
-          <button class="minor-btn" onclick="armScreen()">+ Screen</button>
+        <div class="btn-row no-top mb-sm">
+          <button type="button" class="minor-btn" onclick="armMedia(true, false)">+ Voice</button>
+          <button type="button" class="minor-btn" onclick="armMedia(true, true)">+ Video</button>
+          <button type="button" class="minor-btn" onclick="armScreen()">+ Screen</button>
         </div>
-        <textarea id="myCode" rows="3" readonly placeholder="Click Create Invite to generate & auto-copy your Magic Link..."></textarea>
+        <textarea id="myCode" rows="3" readonly aria-label="Your generated invite or reply link" placeholder="Click Create Invite to generate & auto-copy your Magic Link..."></textarea>
         <div class="btn-row">
-          <button onclick="createInvite()">Create Invite</button>
-          <button class="minor-btn" onclick="copyCode()">Copy Link</button>
+          <button type="button" onclick="createInvite()">Create Invite</button>
+          <button type="button" class="minor-btn" onclick="copyCode()">Copy Link</button>
         </div>
       </div>
 
-            <div class="panel-box col">
+      <div class="panel-box col">
         <h2>Join a Desk (Auto-Connects on Paste)</h2>
-        <textarea id="friendCode" rows="5" placeholder="Paste your friend's invite or reply link here — connects automatically..."></textarea>
+        <textarea id="friendCode" rows="5" aria-label="Paste your friend's invite or reply link" placeholder="Paste your friend's invite or reply link here — connects automatically..."></textarea>
         <div class="btn-row">
-          <!-- 👇 PASTE IT RIGHT HERE 👇 -->
-          <button class="minor-btn" onclick="smartConnect()">Connect</button>
+          <button type="button" class="minor-btn" onclick="smartConnect()">Connect</button>
         </div>
       </div>
-
     </section>
 
     <section id="callBox" class="panel-box hidden">
@@ -58,64 +57,65 @@
         </div>
       </div>
       <div class="btn-row">
-        <button id="muteBtn" class="minor-btn" style="flex:1;" onclick="toggleMute()">🔇 Mute Mic</button>
-        <button class="end-btn" style="flex:1;" onclick="stopMedia(true)">⏹ End Call</button>
+        <button type="button" id="muteBtn" class="minor-btn flex-1" onclick="toggleMute()">&#128263; Mute Mic</button>
+        <button type="button" class="end-btn flex-1" onclick="stopMedia(true)">&#9209; End Call</button>
       </div>
     </section>
 
     <section id="watchBox" class="panel-box hidden">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <h2 style="margin:0; border:none;">Watch Together</h2>
-        <div class="btn-row" style="margin:0;">
-          <label for="videoFile" class="file-btn">📁 Load Video</label>
+      <div class="panel-head">
+        <h2>Watch Together</h2>
+        <div class="btn-row no-top">
+          <label for="videoFile" class="file-btn">&#128193; Load Video</label>
           <input type="file" id="videoFile" accept="video/*" class="hidden" onchange="loadWatchVideo()">
-          <button class="minor-btn" onclick="toggleWatch()">Hide</button>
+          <button type="button" class="minor-btn" onclick="toggleWatch()">Hide</button>
         </div>
       </div>
-      <video id="watchVideo" controls></video>
+      <video id="watchVideo" controls playsinline></video>
     </section>
 
     <section class="grid-row">
       <div class="panel-box col">
-        <h2>Chat, Clean Links & Files</h2>
-        <div id="chat" class="chat-feed"></div>
-        
+        <h2>Chat, Clean Links &amp; Files</h2>
+        <div id="chat" class="chat-feed" aria-live="polite"></div>
+
         <div class="input-row">
-          <input type="text" id="msgInput" placeholder="Write a message, paste URL, or /clear /export /ping...">
-          <button onclick="sendMsg()">Send</button>
+          <input type="text" id="msgInput" aria-label="Chat message" placeholder="Write a message, paste URL, or /clear /export /ping...">
+          <button type="button" onclick="sendMsg()">Send</button>
         </div>
 
         <div class="btn-row">
-          <label for="fileSend" class="file-btn">📁 Send File</label>
+          <label for="fileSend" class="file-btn">&#128193; Send File</label>
           <input type="file" id="fileSend" class="hidden" onchange="sendFile()">
-          <button id="recBtn" class="minor-btn" onclick="toggleVoice()">🎤 Voice Note</button>
+          <button type="button" id="recBtn" class="minor-btn" onclick="toggleVoice()">&#127908; Voice Note</button>
         </div>
       </div>
 
-      <div class="panel-box">
+      <div class="panel-box col">
         <h2>Shared Sketchpad</h2>
         <canvas id="board" width="480" height="320"></canvas>
         <div class="btn-row">
-          <button class="minor-btn" style="flex:1;" onclick="saveBoard()">Save PNG</button>
-          <button class="minor-btn" style="flex:1;" onclick="wipeBoard(true)">Wipe Board</button>
+          <button type="button" class="minor-btn flex-1" onclick="saveBoard()">Save PNG</button>
+          <button type="button" class="minor-btn flex-1" onclick="wipeBoard(true)">Wipe Board</button>
         </div>
       </div>
     </section>
 
     <section class="panel-box">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <h2 style="margin:0; border:none;">Shared Code & Note Pad</h2>
-        <div class="btn-row" style="margin:0;">
-          <button class="minor-btn" onclick="copyPad()">Copy</button>
-          <button class="minor-btn" onclick="savePad()">Save .txt</button>
+      <div class="panel-head">
+        <h2>Shared Code &amp; Note Pad</h2>
+        <div class="btn-row no-top">
+          <button type="button" class="minor-btn" onclick="copyPad()">Copy</button>
+          <button type="button" class="minor-btn" onclick="savePad()">Save .txt</button>
         </div>
       </div>
-      <textarea id="sharedPad" rows="10" placeholder="Write study notes or paste code here. Both desks sync live..."></textarea>
+      <textarea id="sharedPad" rows="10" spellcheck="false" aria-label="Shared code and notepad" placeholder="Write study notes or paste code here. Both desks sync live..."></textarea>
     </section>
   </main>
 
   <footer class="footer">
     <p>Handcrafted out of personal necessity by Nubaid</p>
+    <p>Zero servers &bull; No accounts &bull; Pure browser P2P</p>
   </footer>
 
   <script src="script.js"></script>
