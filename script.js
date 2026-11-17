@@ -1,23 +1,35 @@
 var pc = null;
-var dc = null;
+var dcChat = null;
+var dcSketch = null;
+var dcFiles = null;
 var recorder = null;
 var chunks = [];
 var localStream = null;
 var syncing = false;
+var padSyncing = false;
+var incomingFiles = {};
+var connectTimer = null;
 
-let logs = JSON.parse(localStorage.getItem("pedesk_logs") || "[]");
+let logs = JSON.parse(sessionStorage.getItem("pedesk_logs") || "[]");
 const chat = document.getElementById("chat");
 const watchVideo = document.getElementById("watchVideo");
+const sharedPad = document.getElementById("sharedPad");
+
+function escapeHTML(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
 
 function addLine(who, html, save) {
   const row = document.createElement("div");
-  row.innerHTML = `<b>[${who}]</b> ${html}`;
+  row.innerHTML = `<b>[${escapeHTML(who)}]</b> ${html}`;
   chat.appendChild(row);
   chat.scrollTop = chat.scrollHeight;
 
   if (save) {
     logs.push({ who, html });
-    localStorage.setItem("pedesk_logs", JSON.stringify(logs));
+    sessionStorage.setItem("pedesk_logs", JSON.stringify(logs));
   }
 }
 
@@ -25,41 +37,107 @@ for (let i = 0; i < logs.length; i++) {
   addLine(logs[i].who, logs[i].html, false);
 }
 
+// --- COMPRESSION & MAGIC URL HELPERS ---
+async function encodeSDP(desc) {
+  const json = JSON.stringify(desc);
+  if (!window.CompressionStream) return btoa(json);
+  const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"));
+  const buf = await new Response(stream).arrayBuffer();
+  const bin = String.fromCharCode(...new Uint8Array(buf));
+  return "PD1_" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function decodeSDP(str) {
+  let clean = str.trim();
+  if (clean.includes("#invite=")) clean = clean.split("#invite=").pop();
+  if (clean.includes("#reply=")) clean = clean.split("#reply=").pop();
+
+  if (!clean.startsWith("PD1_") && !clean.startsWith("PD1:")) {
+    return JSON.parse(clean.startsWith("{") ? clean : atob(clean));
+  }
+  let b64 = clean.slice(4).replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4) b64 += "=";
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const text = await new Response(stream).text();
+  return JSON.parse(text);
+}
+
+function buildMagicLink(type, code) {
+  const base = window.location.href.split("#").shift();
+  return `${base}#${type}=${code}`;
+}
+
 function getPeer() {
   if (pc) return pc;
 
-  const host = ["stun", "l", "google", "com"].join(".");
+  const g1 = ["stun", "l", "google", "com"].join(".");
+  const g2 = ["stun1", "l", "google", "com"].join(".");
+  const cf = ["stun", "cloudflare", "com"].join(".");
+
   pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:" + host + ":19302" }]
+    iceServers: [
+      { urls: "stun:" + g1 + ":19302" },
+      { urls: "stun:" + g2 + ":19302" },
+      { urls: "stun:" + cf + ":3478" }
+    ]
   });
 
-  pc.onicecandidate = () => {
+  pc.onicecandidate = async () => {
     if (pc.localDescription) {
-      document.getElementById("myCode").value = JSON.stringify(pc.localDescription);
+      const code = await encodeSDP(pc.localDescription);
+      const tag = pc.localDescription.type === "offer" ? "invite" : "reply";
+      document.getElementById("myCode").value = buildMagicLink(tag, code);
     }
   };
 
-  pc.ondatachannel = (e) => setupChannel(e.channel);
+  pc.oniceconnectionstatechange = () => {
+    const state = pc.iceConnectionState;
+    if (state === "checking") {
+      addLine("SYS", "Punching through network...", false);
+      clearTimeout(connectTimer);
+      connectTimer = setTimeout(() => {
+        if (pc && pc.iceConnectionState === "checking") {
+          addLine("SYS", "Network firewall is slowing direct P2P. Try switching Wi-Fi or mobile data.", false);
+        }
+      }, 15000);
+    }
+    if (state === "connected" || state === "completed") {
+      clearTimeout(connectTimer);
+    }
+    if (state === "failed") {
+      clearTimeout(connectTimer);
+      addLine("SYS", "Direct P2P blocked by strict router NAT.", false);
+    }
+  };
+
+  pc.ondatachannel = (e) => {
+    if (e.channel.label === "sketch") setupSketchChannel(e.channel);
+    else if (e.channel.label === "files") setupFileChannel(e.channel);
+    else setupChatChannel(e.channel);
+  };
 
   pc.ontrack = (e) => {
     document.getElementById("callBox").classList.remove("hidden");
-    document.getElementById("remoteVideo").srcObject = e.streams[0];
+    document.getElementById("remoteVideo").srcObject = e.streams.at(0);
   };
 
   return pc;
 }
 
 function cleanLink(text) {
-  if (!text.startsWith("http://") && !text.startsWith("https://")) return text;
+  const safeText = escapeHTML(text);
+  if (!text.startsWith("http://") && !text.startsWith("https://")) return safeText;
   try {
     const u = new URL(text);
-    const junk = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "fbclid", "si", "gclid"];
+    const junk = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "fbclid", "si", "gclid", "igshid"];
     for (let i = 0; i < junk.length; i++) {
       u.searchParams.delete(junk[i]);
     }
-    return `<a href="${u.href}" target="_blank">${u.href}</a>`;
+    const cleanHref = escapeHTML(u.href);
+    return `<a href="${cleanHref}" target="_blank" rel="noopener noreferrer">${cleanHref}</a>`;
   } catch {
-    return text;
+    return safeText;
   }
 }
 
@@ -78,13 +156,10 @@ async function armMedia(audio, video) {
     localStream = stream;
     document.getElementById("callBox").classList.remove("hidden");
     document.getElementById("localVideo").srcObject = stream;
-    const tracks = stream.getTracks();
-    for (let i = 0; i < tracks.length; i++) {
-      peer.addTrack(tracks[i], stream);
-    }
+    stream.getTracks().forEach(track => peer.addTrack(track, stream));
     addLine("SYS", "Mic/Cam ready.", false);
   } catch (err) {
-    addLine("SYS", "Media error: " + err.name, false);
+    addLine("SYS", "Media error: " + escapeHTML(err.name), false);
   }
 }
 
@@ -95,30 +170,23 @@ async function armScreen() {
     localStream = stream;
     document.getElementById("callBox").classList.remove("hidden");
     document.getElementById("localVideo").srcObject = stream;
-    const tracks = stream.getTracks();
-    for (let i = 0; i < tracks.length; i++) {
-      peer.addTrack(tracks[i], stream);
-    }
+    stream.getTracks().forEach(track => peer.addTrack(track, stream));
     addLine("SYS", "Screen ready.", false);
   } catch (err) {
-    addLine("SYS", "Screen error: " + err.name, false);
+    addLine("SYS", "Screen error: " + escapeHTML(err.name), false);
   }
 }
 
 function stopMedia(emit) {
   if (localStream) {
-    const tracks = localStream.getTracks();
-    for (let i = 0; i < tracks.length; i++) {
-      tracks[i].stop();
-    }
+    localStream.getTracks().forEach(track => track.stop());
     localStream = null;
   }
 
   if (pc) {
-    const senders = pc.getSenders();
-    for (let i = 0; i < senders.length; i++) {
-      if (senders[i].track) pc.removeTrack(senders[i]);
-    }
+    pc.getSenders().forEach(sender => {
+      if (sender.track) pc.removeTrack(sender);
+    });
   }
 
   document.getElementById("localVideo").srcObject = null;
@@ -129,8 +197,8 @@ function stopMedia(emit) {
   muteBtn.innerText = "🔇 Mute Mic";
   muteBtn.classList.remove("recording");
 
-  if (emit && dc && dc.readyState === "open") {
-    dc.send(JSON.stringify({ type: "endcall" }));
+  if (emit && dcChat && dcChat.readyState === "open") {
+    dcChat.send(JSON.stringify({ type: "endcall" }));
     addLine("SYS", "Call ended.", false);
   }
 }
@@ -140,8 +208,9 @@ function toggleMute() {
   const audioTracks = localStream.getAudioTracks();
   if (audioTracks.length === 0) return;
 
-  const active = !audioTracks[0].enabled;
-  audioTracks[0].enabled = active;
+  const track = audioTracks.at(0);
+  const active = !track.enabled;
+  track.enabled = active;
 
   const btn = document.getElementById("muteBtn");
   if (active) {
@@ -153,50 +222,109 @@ function toggleMute() {
   }
 }
 
-function setupChannel(channel) {
-  dc = channel;
-  dc.onopen = () => {
+// --- CHANNEL 1: RELIABLE CHAT, VIDEO & SHARED PAD SYNC ---
+function setupChatChannel(channel) {
+  dcChat = channel;
+  dcChat.onopen = () => {
     const badge = document.getElementById("status");
     badge.innerText = "[CONNECTED]";
     badge.className = "status-on";
     document.getElementById("connectDrawer").classList.add("hidden");
-    addLine("SYS", "Connected.", false);
+    if (window.location.hash) history.replaceState(null, "", window.location.pathname);
+    addLine("SYS", "Connected (3 isolated channels active).", false);
+
+    if (sharedPad && sharedPad.value) {
+      dcChat.send(JSON.stringify({ type: "pad", text: sharedPad.value }));
+    }
   };
-  dc.onclose = () => {
+  dcChat.onclose = () => {
     const badge = document.getElementById("status");
     badge.innerText = "[OFFLINE]";
     badge.className = "status-off";
     stopMedia(false);
     addLine("SYS", "Disconnected.", false);
   };
-  dc.onmessage = (e) => {
+  dcChat.onmessage = (e) => {
     const pkt = JSON.parse(e.data);
-    if (pkt.type === "msg") addLine("FRIEND", pkt.html, true);
-    if (pkt.type === "file") {
-      addLine("FRIEND", `<a href="${pkt.data}" download="${pkt.name}">💾 ${pkt.name}</a>`, false);
-    }
-    if (pkt.type === "voice") {
-      addLine("FRIEND", `<br><audio controls src="${pkt.data}"></audio>`, false);
-    }
-    if (pkt.type === "draw") drawLine(pkt.x1, pkt.y1, pkt.x2, pkt.y2, false);
+    if (pkt.type === "msg") addLine("FRIEND", cleanLink(pkt.text), true);
+    if (pkt.type === "voice") addLine("FRIEND", `<br><audio controls src="${pkt.data}"></audio>`, false);
     if (pkt.type === "wipe") wipeBoard(false);
     if (pkt.type === "endcall") stopMedia(false);
     if (pkt.type === "video") syncWatch(pkt);
-    if (pkt.type === "ping") dc.send(JSON.stringify({ type: "pong", ts: pkt.ts }));
+    if (pkt.type === "pad" && sharedPad) {
+      padSyncing = true;
+      sharedPad.value = pkt.text;
+      setTimeout(() => { padSyncing = false; }, 50);
+    }
+    if (pkt.type === "ping") dcChat.send(JSON.stringify({ type: "pong", ts: pkt.ts }));
     if (pkt.type === "pong") addLine("SYS", (Date.now() - pkt.ts) + "ms", false);
   };
+}
+
+// --- CHANNEL 2: LOW-LATENCY SKETCHPAD ---
+function setupSketchChannel(channel) {
+  dcSketch = channel;
+  dcSketch.onmessage = (e) => {
+    const pkt = JSON.parse(e.data);
+    if (pkt.type === "draw") drawLine(pkt.x1, pkt.y1, pkt.x2, pkt.y2, false);
+  };
+}
+
+// --- CHANNEL 3: DEDICATED CHUNKED FILE PIPE ---
+function setupFileChannel(channel) {
+  dcFiles = channel;
+  dcFiles.onmessage = (e) => {
+    const pkt = JSON.parse(e.data);
+    if (pkt.type === "file-meta") {
+      incomingFiles[pkt.id] = { name: pkt.name, total: pkt.total, parts: [] };
+      addLine("SYS", `Receiving ${escapeHTML(pkt.name)}...`, false);
+    }
+    if (pkt.type === "file-chunk") {
+      const f = incomingFiles[pkt.id];
+      if (!f) return;
+      f.parts[pkt.index] = pkt.data;
+      if (f.parts.filter(Boolean).length === f.total) {
+        const b64 = f.parts.join("");
+        const safeName = escapeHTML(f.name);
+        addLine("FRIEND", `<a href="${b64}" download="${safeName}">💾 ${safeName}</a>`, false);
+        delete incomingFiles[pkt.id];
+      }
+    }
+  };
+}
+
+function waitForICE(peer) {
+  return new Promise((resolve) => {
+    if (peer.iceGatheringState === "complete") return resolve();
+    const check = () => {
+      if (peer.iceGatheringState === "complete") {
+        peer.removeEventListener("icegatheringstatechange", check);
+        resolve();
+      }
+    };
+    peer.addEventListener("icegatheringstatechange", check);
+    setTimeout(resolve, 1500);
+  });
 }
 
 async function createInvite() {
   try {
     const peer = getPeer();
-    setupChannel(peer.createDataChannel("desk"));
+    setupChatChannel(peer.createDataChannel("chat"));
+    setupSketchChannel(peer.createDataChannel("sketch", { ordered: false, maxRetransmits: 0 }));
+    setupFileChannel(peer.createDataChannel("files"));
+
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
-    document.getElementById("myCode").value = JSON.stringify(peer.localDescription);
-    addLine("SYS", "Invite created.", false);
+    await waitForICE(peer);
+
+    const code = await encodeSDP(peer.localDescription);
+    const link = buildMagicLink("invite", code);
+    document.getElementById("myCode").value = link;
+    if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
+    addLine("SYS", "Magic Invite Link created & auto-copied! Send it to your friend.", false);
   } catch (err) {
-    addLine("SYS", "Error: " + err.message, false);
+    addLine("SYS", "Error: " + escapeHTML(err.message), false);
   }
 }
 
@@ -205,34 +333,113 @@ async function joinDesk() {
   if (!raw) return;
   try {
     const peer = getPeer();
-    await peer.setRemoteDescription(JSON.parse(raw));
+    const desc = await decodeSDP(raw);
+    await peer.setRemoteDescription(desc);
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
-    document.getElementById("myCode").value = JSON.stringify(peer.localDescription);
-    addLine("SYS", "Reply ready.", false);
-  } catch {
-    addLine("SYS", "Bad code.", false);
+    await waitForICE(peer);
+
+    const code = await encodeSDP(peer.localDescription);
+    const replyLink = buildMagicLink("reply", code);
+    document.getElementById("myCode").value = replyLink;
+    if (navigator.clipboard) navigator.clipboard.writeText(replyLink).catch(() => {});
+    addLine("SYS", "Magic Reply Link ready & auto-copied! Send it back to host.", false);
+  } catch (err) {
+    addLine("SYS", "Invite error: " + escapeHTML(err.message), false);
   }
 }
 
 async function finishLink() {
   const raw = document.getElementById("friendCode").value.trim();
   if (!raw) return;
+  const peer = getPeer();
+  if (peer.signalingState !== "have-local-offer") return;
   try {
-    const peer = getPeer();
-    await peer.setRemoteDescription(JSON.parse(raw));
-  } catch {
-    addLine("SYS", "Bad code.", false);
+    const desc = await decodeSDP(raw);
+    await peer.setRemoteDescription(desc);
+  } catch (err) {
+    addLine("SYS", "Reply error: " + escapeHTML(err.message), false);
   }
+}
+
+function smartConnect() {
+  if (pc && pc.signalingState === "stable") return;
+  if (pc && pc.signalingState === "have-local-offer") finishLink();
+  else joinDesk();
 }
 
 function copyCode() {
   const box = document.getElementById("myCode");
   if (!box.value) return;
+  box.focus();
   box.select();
-  document.execCommand("copy");
+  box.setSelectionRange(0, box.value.length);
   if (navigator.clipboard) navigator.clipboard.writeText(box.value).catch(() => {});
-  addLine("SYS", "Copied.", false);
+  addLine("SYS", "Full link copied to clipboard.", false);
+}
+
+// --- FOOLPROOF AUTO-DETECTION ON PASTE OR URL OPEN ---
+document.getElementById("friendCode").addEventListener("input", () => {
+  setTimeout(() => {
+    const val = document.getElementById("friendCode").value.trim();
+    if (!val.includes("PD1_") && !val.startsWith("{")) return;
+
+    if (pc && pc.signalingState === "have-local-offer") {
+      if (val.includes("#invite=")) {
+        addLine("SYS", "That is your own Invite link! Paste your friend's Reply link instead.", false);
+        return;
+      }
+      addLine("SYS", "Reply detected! Connecting automatically...", false);
+      finishLink();
+    } else if (!pc) {
+      addLine("SYS", "Invite detected! Generating reply automatically...", false);
+      joinDesk();
+    }
+  }, 50);
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  if (window.location.hash.startsWith("#invite=")) {
+    document.getElementById("connectDrawer").classList.remove("hidden");
+    document.getElementById("friendCode").value = window.location.href;
+    addLine("SYS", "Magic Invite opened! Generating your reply link...", false);
+    joinDesk();
+  }
+});
+
+// --- SHARED CODE & NOTE PAD LIVE SYNC ---
+if (sharedPad) {
+  sharedPad.addEventListener("input", () => {
+    if (padSyncing || !dcChat || dcChat.readyState !== "open") return;
+    dcChat.send(JSON.stringify({ type: "pad", text: sharedPad.value }));
+  });
+
+  sharedPad.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const start = sharedPad.selectionStart;
+      const end = sharedPad.selectionEnd;
+      sharedPad.value = sharedPad.value.substring(0, start) + "  " + sharedPad.value.substring(end);
+      sharedPad.selectionStart = sharedPad.selectionEnd = start + 2;
+      sharedPad.dispatchEvent(new Event("input"));
+    }
+  });
+}
+
+function copyPad() {
+  if (!sharedPad || !sharedPad.value) return;
+  sharedPad.select();
+  if (navigator.clipboard) navigator.clipboard.writeText(sharedPad.value).catch(() => {});
+  addLine("SYS", "Code/Notes copied.", false);
+}
+
+function savePad() {
+  if (!sharedPad) return;
+  const blob = new Blob([sharedPad.value], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pedesk_notes.txt";
+  a.click();
 }
 
 function sendMsg() {
@@ -247,7 +454,7 @@ function sendMsg() {
   }
 
   if (text === "/clear") {
-    localStorage.removeItem("pedesk_logs");
+    sessionStorage.removeItem("pedesk_logs");
     logs = [];
     chat.innerHTML = "";
     return;
@@ -263,8 +470,8 @@ function sendMsg() {
   }
 
   if (text === "/ping") {
-    if (dc && dc.readyState === "open") {
-      dc.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+    if (dcChat && dcChat.readyState === "open") {
+      dcChat.send(JSON.stringify({ type: "ping", ts: Date.now() }));
     }
     return;
   }
@@ -272,8 +479,8 @@ function sendMsg() {
   const clean = cleanLink(text);
   addLine("ME", clean, true);
 
-  if (dc && dc.readyState === "open") {
-    dc.send(JSON.stringify({ type: "msg", html: clean }));
+  if (dcChat && dcChat.readyState === "open") {
+    dcChat.send(JSON.stringify({ type: "msg", text: text }));
   }
 }
 
@@ -283,14 +490,30 @@ document.getElementById("msgInput").addEventListener("keypress", (e) => {
 
 function sendFile() {
   const input = document.getElementById("fileSend");
-  const file = input.files[0];
+  const file = input.files.item(0);
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = (e) => {
-    addLine("ME", `<a href="${e.target.result}" download="${file.name}">💾 ${file.name}</a>`, false);
-    if (dc && dc.readyState === "open") {
-      dc.send(JSON.stringify({ type: "file", name: file.name, data: e.target.result }));
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    const safeName = escapeHTML(file.name);
+    addLine("ME", `<a href="${dataUrl}" download="${safeName}">💾 ${safeName}</a>`, false);
+
+    const pipe = (dcFiles && dcFiles.readyState === "open") ? dcFiles : dcChat;
+    if (pipe && pipe.readyState === "open") {
+      const CHUNK_SIZE = 16000;
+      const total = Math.ceil(dataUrl.length / CHUNK_SIZE);
+      const id = Date.now().toString(36);
+
+      pipe.send(JSON.stringify({ type: "file-meta", id, name: file.name, total }));
+
+      for (let i = 0; i < total; i++) {
+        while (pipe.bufferedAmount > 65536) {
+          await new Promise(r => setTimeout(r, 20));
+        }
+        const slice = dataUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        pipe.send(JSON.stringify({ type: "file-chunk", id, index: i, data: slice }));
+      }
     }
     input.value = "";
   };
@@ -312,22 +535,19 @@ async function toggleVoice() {
         const reader = new FileReader();
         reader.onload = (ev) => {
           addLine("ME", `<br><audio controls src="${ev.target.result}"></audio>`, false);
-          if (dc && dc.readyState === "open") {
-            dc.send(JSON.stringify({ type: "voice", data: ev.target.result }));
+          if (dcChat && dcChat.readyState === "open") {
+            dcChat.send(JSON.stringify({ type: "voice", data: ev.target.result }));
           }
         };
         reader.readAsDataURL(blob);
-        const tracks = stream.getTracks();
-        for (let i = 0; i < tracks.length; i++) {
-          tracks[i].stop();
-        }
+        stream.getTracks().forEach(track => track.stop());
       };
 
       recorder.start();
       btn.innerText = "⏹ Stop";
       btn.classList.add("recording");
     } catch (err) {
-      addLine("SYS", "Mic error: " + err.name, false);
+      addLine("SYS", "Mic error: " + escapeHTML(err.name), false);
     }
   } else {
     recorder.stop();
@@ -337,15 +557,15 @@ async function toggleVoice() {
 }
 
 function loadWatchVideo() {
-  const file = document.getElementById("videoFile").files[0];
+  const file = document.getElementById("videoFile").files.item(0);
   if (!file) return;
   watchVideo.src = URL.createObjectURL(file);
-  addLine("SYS", "Loaded video: " + file.name, false);
+  addLine("SYS", "Loaded video: " + escapeHTML(file.name), false);
 }
 
 function sendWatch(state) {
-if (syncing || !dc || dc.readyState !== "open") return;
-dc.send(JSON.stringify({ type: "video", state: state, time: watchVideo.currentTime }));
+  if (syncing || !dcChat || dcChat.readyState !== "open") return;
+dcChat.send(JSON.stringify({ type: "video", state: state, time: watchVideo.currentTime }));
 }
 function syncWatch(pkt) {
 document.getElementById("watchBox").classList.remove("hidden");
@@ -373,14 +593,15 @@ ctx.beginPath();
 ctx.moveTo(x1, y1);
 ctx.lineTo(x2, y2);
 ctx.stroke();
-if (emit && dc && dc.readyState === "open") {
-dc.send(JSON.stringify({ type: "draw", x1, y1, x2, y2 }));
+const pipe = (dcSketch && dcSketch.readyState === "open") ? dcSketch : dcChat;
+if (emit && pipe && pipe.readyState === "open") {
+pipe.send(JSON.stringify({ type: "draw", x1, y1, x2, y2 }));
 }
 }
 function wipeBoard(emit) {
 ctx.clearRect(0, 0, canvas.width, canvas.height);
-if (emit && dc && dc.readyState === "open") {
-dc.send(JSON.stringify({ type: "wipe" }));
+if (emit && dcChat && dcChat.readyState === "open") {
+dcChat.send(JSON.stringify({ type: "wipe" }));
 }
 }
 function saveBoard() {
@@ -389,34 +610,43 @@ a.href = canvas.toDataURL("image/png");
 a.download = "pedesk_sketch.png";
 a.click();
 }
+function getCanvasPos(clientX, clientY) {
+const rect = canvas.getBoundingClientRect();
+return {
+x: (clientX - rect.left) * (canvas.width / rect.width),
+y: (clientY - rect.top) * (canvas.height / rect.height)
+};
+}
 canvas.onmousedown = (e) => {
+const pos = getCanvasPos(e.clientX, e.clientY);
 drawing = true;
-lx = e.offsetX;
-ly = e.offsetY;
+lx = pos.x;
+ly = pos.y;
 };
 canvas.onmouseup = () => { drawing = false; };
 canvas.onmouseleave = () => { drawing = false; };
 canvas.onmousemove = (e) => {
 if (!drawing) return;
-drawLine(lx, ly, e.offsetX, e.offsetY, true);
-lx = e.offsetX;
-ly = e.offsetY;
+const pos = getCanvasPos(e.clientX, e.clientY);
+drawLine(lx, ly, pos.x, pos.y, true);
+lx = pos.x;
+ly = pos.y;
 };
 canvas.ontouchstart = (e) => {
 e.preventDefault();
-const rect = canvas.getBoundingClientRect();
+const touch = e.touches.item(0);
+const pos = getCanvasPos(touch.clientX, touch.clientY);
 drawing = true;
-lx = e.touches[0].clientX - rect.left;
-ly = e.touches[0].clientY - rect.top;
+lx = pos.x;
+ly = pos.y;
 };
 canvas.ontouchend = () => { drawing = false; };
 canvas.ontouchmove = (e) => {
 e.preventDefault();
 if (!drawing) return;
-const rect = canvas.getBoundingClientRect();
-const cx = e.touches[0].clientX - rect.left;
-const cy = e.touches[0].clientY - rect.top;
-drawLine(lx, ly, cx, cy, true);
-lx = cx;
-ly = cy;
+const touch = e.touches.item(0);
+const pos = getCanvasPos(touch.clientX, touch.clientY);
+drawLine(lx, ly, pos.x, pos.y, true);
+lx = pos.x;
+ly = pos.y;
 };

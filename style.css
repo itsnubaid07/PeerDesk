@@ -163,6 +163,13 @@ canvas {
   max-width: 100%;
 }
 
+#sharedPad {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+  tab-size: 2;
+}
+
 .footer {
   margin-top: 2.5rem;
   font-size: 0.8rem;
